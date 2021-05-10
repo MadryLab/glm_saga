@@ -5,7 +5,7 @@ from sklearn.linear_model import LogisticRegression, ElasticNet
 from sklearn.datasets import make_classification, make_regression
 from sklearn.metrics import r2_score
 
-def toy_example(): 
+def toy_example(verbose=False, tol=1e-5): 
     NITERS = 2000
     NUM_CLASSES=3
     ALPHA = 0.5
@@ -21,7 +21,7 @@ def toy_example():
     # Standardize input
     X = (X-X.mean(0))/X.std(0)
 
-    # calculate maximum lam
+    # calculate maximum lam, use half of maximum for testing purposes
     LAMBDA = maximum_reg(ch.from_numpy(X).float(),ch.from_numpy(y).long(), group=False) / max(0.001, ALPHA)
     LAMBDA = LAMBDA / 2
 
@@ -32,18 +32,12 @@ def toy_example():
                               multi_class='multinomial',
                               l1_ratio=ALPHA, C=C, 
                               solver='saga', max_iter=NITERS, tol=1e-6) 
-    # regr = LogisticRegression(random_state=0, penalty='l2',
-    #                           multi_class='multinomial', 
-    #                           C=C,
-    #                           solver='saga', max_iter=NITERS, tol=1e-6)
-    # regr = LogisticRegression(random_state=0, penalty='none',
-    #                           multi_class='multinomial', 
-    #                           C=1/X.shape[0],
-    #                           max_iter=NITERS, tol=1e-6)
+
     regr.fit(X, y)
-    print(regr.coef_)
-    print(regr.intercept_)
-    print(regr.predict(np.zeros((1,10))))
+    if verbose: 
+        print(regr.coef_)
+        print(regr.intercept_)
+        print(regr.predict(np.zeros((1,10))))
 
     X,y = ch.from_numpy(X).float(), ch.from_numpy(y).long()
 
@@ -54,136 +48,70 @@ def toy_example():
     # Print sklearn loss
     weight.data = ch.from_numpy(regr.coef_).float()
     bias.data = ch.from_numpy(regr.intercept_).float()
-    print(f"sklearn loss: {elastic_loss(linear, X, y, LAMBDA, ALPHA).item()}")
-
-
-    # sklearn doesn't do group elasticnet
-    train(linear, X, y, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=False)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,NUM_FEATURES)).max(1)[1])
-    print(f"proximal gradient loss: {elastic_loss(linear, X, y, LAMBDA, ALPHA).item()}")
+    loss_sklearn = elastic_loss(linear, X, y, LAMBDA, ALPHA).item()
+    print(f"sklearn loss: {loss_sklearn}")
 
     nnz = (weight.abs() > 1e-5).sum().item()
     total = weight.numel()
+    nnz_sklearn = nnz/total
     print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+
+
+    # note: sklearn doesn't do group elasticnet
+    train(linear, X, y, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=False)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,NUM_FEATURES)).max(1)[1])
+    loss_pg = elastic_loss(linear, X, y, LAMBDA, ALPHA).item()
+    print(f"proximal gradient loss: {loss_pg}")
+    assert abs(loss_pg - loss_sklearn) < tol
+
+    nnz = (weight.abs() > 1e-5).sum().item()
+    total = weight.numel()
+    nnz_pg = nnz/total
+    print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+    assert abs(nnz_pg - nnz_sklearn) < tol
 
     dataset = IndexedTensorDataset(X,y)
     loader = DataLoader(dataset, batch_size=20, shuffle=True)
     LAMBDA_loader = maximum_reg_loader(loader, group=False) / max(0.001, ALPHA)
-    print("lam check", LAMBDA, LAMBDA_loader)
+    print("lam check", LAMBDA, LAMBDA_loader/2)
+    assert abs(LAMBDA - LAMBDA_loader/2) < tol
 
     for p in [weight,bias]: 
         p.data.zero_()
         p.grad.zero_()
 
-    train_spg(linear, loader, 0.1*STEP_SIZE, 2*NITERS, LAMBDA, ALPHA, group=False, verbose=NITERS//10)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,NUM_FEATURES)).max(1)[1])
-    print(f"spg loss: {elastic_loss(linear, X, y, LAMBDA, ALPHA).item()}")
+    train_spg(linear, loader, 0.1*STEP_SIZE, 2*NITERS, LAMBDA, ALPHA, group=False, verbose=None)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,NUM_FEATURES)).max(1)[1])
+    loss_spg = elastic_loss(linear, X, y, LAMBDA, ALPHA).item()
+    print(f"spg loss: {loss_spg}")
+    assert abs(loss_spg - loss_sklearn) < tol
 
     for p in [weight,bias]: 
         p.data.zero_()
         p.grad.zero_()
 
-    train_saga(linear, loader, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=False, verbose=NITERS//10)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,NUM_FEATURES)).max(1)[1])
-    print(f"saga loss: {elastic_loss(linear, X, y, LAMBDA, ALPHA).item()}")
+    train_saga(linear, loader, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=False, verbose=None)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,NUM_FEATURES)).max(1)[1])
+    loss_saga = elastic_loss(linear, X, y, LAMBDA, ALPHA).item()
+    print(f"saga loss: {loss_saga}")
+    assert abs(loss_saga - loss_sklearn) < tol
     
     nnz = (weight.abs() > 1e-5).sum().item()
     total = weight.numel()
+    nnz_saga = nnz/total
     print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+    assert abs(nnz_saga - nnz_sklearn) < tol
 
-    for p in [weight,bias]: 
-        p.data.zero_()
-        p.grad.zero_()
-
-    # print("Running GLM path")
-    # glm_saga(linear, loader, STEP_SIZE, NITERS, ALPHA, group=False, verbose=NITERS//10, tol=1e-4)
-
-def imagenet_example(): 
-    # Prepare dataset
-    X_tr, y_tr = [],[]
-    X_te, y_te = [],[]
-
-    for eps in [0,0.25,1,3,5]: 
-        X_tr.append(ch.load(f"data/train_features_{eps}.pth"))
-        y_tr.append(ch.load(f"data/train_labels_{eps}.pth"))
-        X_te.append(ch.load(f"data/val_features_{eps}.pth"))
-        y_te.append(ch.load(f"data/val_labels_{eps}.pth"))
-
-    # Standardize the variables
-    X = ch.cat(X_tr,dim=1)
-    u = X.mean(1).unsqueeze(1)
-    s = X.std(1).unsqueeze(1)
-    X = (X - u)/s
-    y = y_tr[0]
-
-    NITERS = 50
-    NUM_CLASSES=10
-    ALPHA = 0.99
-    STEP_SIZE = 0.001
-    DEVICE = 'cuda'
-
-    # regr = LogisticRegression(random_state=0, penalty='elasticnet',
-    #                           multi_class='multinomial',
-    #                           alpha=ALPHA, C=1/LAMBDA, 
-    #                           solver='saga', max_iter=NITERS, tol=1e-6) 
-    # print("sklearn fitting...")
-    # regr.fit(X[:1000,:2048].cpu(), y[:1000])
-    # print(regr.coef_)
-    # print(regr.intercept_)
-    # print(regr.predict(np.zeros((1,10))))
-    # assert False
-
-    X,y = X.cuda(), y.cuda()
-    print(X.size(0))
-
-    LAMBDA = maximum_reg(X,y, group=True) / max(0.001, ALPHA)
-    print(f"lam {LAMBDA}")
-
-    linear = nn.Linear(X.size(1),NUM_CLASSES)
-    weight = linear.weight
-    bias = linear.bias
-    # if DEVICE == 'cuda': 
-    #     linear = nn.DataParallel(linear)
-    linear = linear.to(DEVICE)
-
-    # weight.data.zero_()
-    # bias.data.zero_()
-
-    # train(linear, X, y, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=True, verbose=NITERS//10)
-    # print(f"proximal gradient loss: {elastic_loss(linear, X, y, LAMBDA, ALPHA).item()}")
-
-    weight.data.zero_()
-    bias.data.zero_()
-
-    dataset = IndexedTensorDataset(X,y)
-    loader = DataLoader(dataset, batch_size=250, shuffle=True)
-    start_time = time.time()
-    train_spg(linear, loader, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=True, verbose=NITERS//10)
-    print(f"minibatch proximal gradient loss: {elastic_loss(linear, X, y, LAMBDA, ALPHA).item()} | time {time.time()-start_time}")
-
-    nnz = (weight.abs() > 1e-5).sum().item()
-    total = weight.numel()
-    print(f"weight nnz {nnz}/{total} ({nnz/total:.4f}) max {weight.max()}")
-
-    weight.data.zero_()
-    bias.data.zero_()
-
-    start_time = time.time()
-    train_saga(linear, loader, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=True, verbose=NITERS//10, 
-               n_ex = X.size(0), n_classes = y.max().item()+1)
-    print(f"saga loss: {elastic_loss(linear, X, y, LAMBDA, ALPHA).item()} | time {time.time()-start_time}")
-
-    nnz = (weight.abs() > 1e-5).sum().item()
-    total = weight.numel()
-    print(f"weight nnz {nnz}/{total} ({nnz/total:.4f}) max {weight.max()}")
-
-def toy_dataloader_example(): 
+def toy_dataloader_example(verbose=False, tol=1e-5): 
     NITERS = 2000
     NUM_CLASSES=3
     ALPHA = 0.5
@@ -207,7 +135,7 @@ def toy_dataloader_example():
     
     ds = IndexedTensorDataset(X,y)
     loader = DataLoader(ds, batch_size=2, shuffle=True)
-    encoder = NormalizedRepresentation(loader, model)
+    preprocess = NormalizedRepresentation(loader, model)
 
     # Standardize input
     with ch.no_grad(): 
@@ -226,18 +154,12 @@ def toy_dataloader_example():
                               multi_class='multinomial',
                               l1_ratio=ALPHA, C=C, 
                               solver='saga', max_iter=NITERS, tol=1e-6) 
-    # regr = LogisticRegression(random_state=0, penalty='l2',
-    #                           multi_class='multinomial', 
-    #                           C=C,
-    #                           solver='saga', max_iter=NITERS, tol=1e-6)
-    # regr = LogisticRegression(random_state=0, penalty='none',
-    #                           multi_class='multinomial', 
-    #                           C=1/X.shape[0],
-    #                           max_iter=NITERS, tol=1e-6)
+
     regr.fit(Z.numpy(), y.numpy())
-    print(regr.coef_)
-    print(regr.intercept_)
-    print(regr.predict(np.zeros((1,5))))
+    if verbose: 
+        print(regr.coef_)
+        print(regr.intercept_)
+        print(regr.predict(np.zeros((1,5))))
 
     linear = nn.Linear(Z.size(1),NUM_CLASSES)
     weight = linear.weight
@@ -246,63 +168,84 @@ def toy_dataloader_example():
     # Print sklearn loss
     weight.data = ch.from_numpy(regr.coef_).float()
     bias.data = ch.from_numpy(regr.intercept_).float()
-    print(f"sklearn loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()}")
-
-
-    # sklearn doesn't do group elasticnet
-    train(linear, Z, y, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=False)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,5)).max(1)[1])
-    print(f"proximal gradient loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()}")
+    loss_sklearn = elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()
+    print(f"sklearn loss: {loss_sklearn}")
 
     nnz = (weight.abs() > 1e-5).sum().item()
     total = weight.numel()
+    nnz_sklearn = nnz/total
     print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+
+    # sklearn doesn't do group elasticnet
+    train(linear, Z, y, STEP_SIZE, NITERS, LAMBDA, ALPHA, group=False)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,5)).max(1)[1])
+    loss_pg = elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()
+    print(f"proximal gradient loss: {loss_pg}")
+    assert abs(loss_pg - loss_sklearn) < tol
+
+
+    nnz = (weight.abs() > 1e-5).sum().item()
+    total = weight.numel()
+    nnz_pg = nnz/total
+    print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+    assert abs(nnz_pg - nnz_sklearn) < tol
 
     dataset = IndexedTensorDataset(X,y)
     loader = DataLoader(dataset, batch_size=20, shuffle=False)
-    LAMBDA_loader = maximum_reg_loader(loader, group=False, encoder=encoder) / max(0.001, ALPHA)
+    LAMBDA_loader = maximum_reg_loader(loader, group=False, preprocess=preprocess) / max(0.001, ALPHA)
     print("lam check", LAMBDA, LAMBDA_loader / 2)
+    assert abs(LAMBDA - LAMBDA_loader/2) < tol
 
     for p in [weight,bias]: 
         p.data.zero_()
         p.grad.zero_()
 
-    train_spg(linear, loader, 0.1*STEP_SIZE, 2*NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, encoder=encoder)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,5)).max(1)[1])
-    print(f"spg loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()}")
+    train_spg(linear, loader, 0.1*STEP_SIZE, 2*NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=None, preprocess=preprocess)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,5)).max(1)[1])
+    loss_spg = elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()
+    print(f"spg loss: {loss_spg}")
+    assert abs(loss_spg - loss_sklearn) < tol
 
     for p in [weight,bias]: 
         p.data.zero_()
         p.grad.zero_()
 
     alt_loader = add_index_to_dataloader(DataLoader(TensorDataset(X,y), batch_size=20, shuffle=True))
-    train_saga(linear, alt_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, encoder=encoder)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,5)).max(1)[1])
-    print(f"saga loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()}")
-    
+    train_saga(linear, alt_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=None, preprocess=preprocess)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,5)).max(1)[1])
+    loss_saga = elastic_loss(linear, Z, y, LAMBDA, ALPHA).item()
+    print(f"saga loss: {loss_saga}")
+    assert abs(loss_saga - loss_sklearn) < tol
+
     nnz = (weight.abs() > 1e-5).sum().item()
     total = weight.numel()
+    nnz_saga = nnz/total
     print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+    assert abs(nnz_saga - nnz_sklearn) < tol
 
     for p in [weight,bias]: 
         p.data.zero_()
         p.grad.zero_()
 
 
-    print("sample weighted test")
+    print("==> testing with sample weights")
     # sample_weight = np.arange(Z.size(0))/Z.size(0)
     sample_weight = np.ones((Z.size(0),))
     sample_weight[::2] = 0.5
     regr.fit(Z.numpy(), y.numpy(), sample_weight = sample_weight)
-    print(regr.coef_)
-    print(regr.intercept_)
-    print(regr.predict(np.zeros((1,5))))
+    if verbose: 
+        print(regr.coef_)
+        print(regr.intercept_)
+        print(regr.predict(np.zeros((1,5))))
 
     linear = nn.Linear(Z.size(1),NUM_CLASSES)
     weight = linear.weight
@@ -312,36 +255,41 @@ def toy_dataloader_example():
     weight.data = ch.from_numpy(regr.coef_).float()
     bias.data = ch.from_numpy(regr.intercept_).float()
     sample_weight_pth = ch.from_numpy(sample_weight).float()
-    print(f"sklearn weighted loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='multinomial', sample_weight=sample_weight_pth).item()}")
+    wloss_sklearn = elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='multinomial', sample_weight=sample_weight_pth).item()
+    print(f"sklearn weighted loss: {wloss_sklearn}")
 
     for p in [weight,bias]: 
         p.data.zero_()
 
     weighted_loader = add_index_to_dataloader(DataLoader(TensorDataset(X,y), batch_size=20, shuffle=True), sample_weight=sample_weight_pth)
-    train_saga(linear, weighted_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, encoder=encoder, family='multinomial', tol=1e-7, lookbehind=100)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,5)).max(1)[1])
-    print(f"saga loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='multinomial', sample_weight=sample_weight_pth).item()}")
+    train_saga(linear, weighted_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=None, preprocess=preprocess, family='multinomial', tol=1e-7, lookbehind=100)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,5)).max(1)[1])
+    wloss_saga = elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='multinomial', sample_weight=sample_weight_pth).item()
+    print(f"saga loss: {wloss_saga}")
+    assert abs(wloss_saga - wloss_sklearn) < tol
     
 
     for p in [weight,bias]: 
         p.data.zero_()
 
     alt_weighted_loader = DataLoader(IndexedTensorDataset(X,y,sample_weight_pth), batch_size=20, shuffle=True)
-    train_saga(linear, alt_weighted_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, encoder=encoder, family='multinomial', tol=1e-7, lookbehind=100)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,5)).max(1)[1])
-    print(f"alt saga loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='multinomial', sample_weight=sample_weight_pth).item()}")
-    nnz = (weight.abs() > 1e-5).sum().item()
-    total = weight.numel()
-    print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+    train_saga(linear, alt_weighted_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=None, preprocess=preprocess, family='multinomial', tol=1e-7, lookbehind=100)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,5)).max(1)[1])
+    wloss_saga = elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='multinomial', sample_weight=sample_weight_pth).item()
+    print(f"alt saga loss: {wloss_saga}")
+    assert abs(wloss_saga - wloss_sklearn) < tol
 
-def toy_regression_example(): 
-    NITERS = 2000
+def toy_regression_example(verbose=False, tol=1e-2): 
+    # sklearn needs a lot of iterations to converge
+    NITERS = 100000
     NUM_TARGETS=3
-    ALPHA = 0.5
+    ALPHA = 0.9
     STEP_SIZE = 0.1
     DEVICE = 'cpu'
 
@@ -349,7 +297,7 @@ def toy_regression_example():
     NUM_FEATURES = 10
 
     X, y = make_regression(n_features=NUM_FEATURES, random_state=0, n_targets=NUM_TARGETS,
-        n_informative=3)
+        n_informative=2)
 
     X,y = ch.from_numpy(X).float(), ch.from_numpy(y).float()
 
@@ -362,7 +310,7 @@ def toy_regression_example():
     
     ds = IndexedTensorDataset(X,y)
     loader = DataLoader(ds, batch_size=2, shuffle=True)
-    encoder = NormalizedRepresentation(loader, model)
+    preprocess = NormalizedRepresentation(loader, model)
 
     # Standardize input
     with ch.no_grad(): 
@@ -377,23 +325,13 @@ def toy_regression_example():
     # Convert to sklearn parameters
     C = 1/(LAMBDA*X.shape[0])
 
-    regr = ElasticNet(alpha=LAMBDA, l1_ratio=ALPHA, tol=1e-8, max_iter=NITERS)
-    # regr = ElasticNet(random_state=0, penalty='elasticnet',
-    #                           multi_class='multinomial',
-    #                           l1_ratio=ALPHA, C=C, 
-    #                           solver='saga', max_iter=NITERS, tol=1e-6) 
-    # regr = LogisticRegression(random_state=0, penalty='l2',
-    #                           multi_class='multinomial', 
-    #                           C=C,
-    #                           solver='saga', max_iter=NITERS, tol=1e-6)
-    # regr = LogisticRegression(random_state=0, penalty='none',
-    #                           multi_class='multinomial', 
-    #                           C=1/X.shape[0],
-    #                           max_iter=NITERS, tol=1e-6)
+    regr = ElasticNet(alpha=LAMBDA, l1_ratio=ALPHA, tol=1e-8, max_iter=NITERS, selection='random')
+
     regr.fit(Z.numpy(), y.numpy())
-    print(regr.coef_)
-    print(regr.intercept_)
-    print(regr.predict(np.zeros((1,5))))
+    if verbose: 
+        print(regr.coef_)
+        print(regr.intercept_)
+        print(regr.predict(np.zeros((1,5))))
 
     linear = nn.Linear(Z.size(1),NUM_TARGETS)
     weight = linear.weight
@@ -402,35 +340,56 @@ def toy_regression_example():
     # Print sklearn loss
     weight.data = ch.from_numpy(regr.coef_).float()
     bias.data = ch.from_numpy(regr.intercept_).float()
-    print(f"sklearn loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian').item()}")
+    loss_sklearn = elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian').item()
+    print(f"sklearn loss: {loss_sklearn}")
+
+    nnz = (weight.abs() > 1e-5).sum().item()
+    total = weight.numel()
+    nnz_sklearn = nnz/total
+    print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
 
     for p in [weight,bias]: 
         p.data.zero_()
 
     dataset = IndexedTensorDataset(X,y)
     loader = DataLoader(dataset, batch_size=20, shuffle=True)
-    LAMBDA_loader = maximum_reg_loader(loader, group=False, family='gaussian', encoder=encoder) / max(0.001, ALPHA)
-    print("lam check", LAMBDA, LAMBDA_loader)
+    LAMBDA_loader = maximum_reg_loader(loader, group=False, family='gaussian', preprocess=preprocess) / max(0.001, ALPHA)
+    print("lam check", LAMBDA, LAMBDA_loader/2)
+    assert abs(LAMBDA - LAMBDA_loader/2) < tol
 
     alt_loader = add_index_to_dataloader(DataLoader(TensorDataset(X,y), batch_size=20, shuffle=True))
-    train_saga(linear, alt_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, encoder=encoder, family='gaussian', tol=1e-7, lookbehind=100)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,5)).max(1)[1])
-    print(f"saga loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian').item()}")
+    train_saga(linear, alt_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, preprocess=preprocess, family='gaussian', tol=1e-9, lookbehind=100)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,5)).max(1)[1])
+    loss_saga = elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian').item()
+    print(f"saga loss: {loss_saga}")
+    assert abs(loss_saga - loss_sklearn) < tol
     
     nnz = (weight.abs() > 1e-5).sum().item()
     total = weight.numel()
+    nnz_saga = nnz/total
     print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
+    assert abs(nnz_saga - nnz_sklearn) < tol
 
-    print("sample weighted test")
+    print("==> testing with sample weights")
     # sample_weight = np.arange(Z.size(0))/Z.size(0)
     sample_weight = np.ones((Z.size(0),))
     sample_weight[::2] = 0.5
+    # Elasticnet in sklearn does a thing where sample weights 
+    # are automatically rescaled to sum to n_samples. See: 
+    # https://github.com/scikit-learn/scikit-learn/blob/15a949460/sklearn/linear_model/_coordinate_descent.py#L791
+    # 
+    # To make it consistent, we do the same thing here so that 
+    # SAGA is seeing the same weights
+    sample_weight *= Z.size(0)/(sample_weight.sum())
+
     regr.fit(Z.numpy(), y.numpy(), sample_weight = sample_weight)
-    print(regr.coef_)
-    print(regr.intercept_)
-    print(regr.predict(np.zeros((1,5))))
+    if verbose: 
+        print(regr.coef_)
+        print(regr.intercept_)
+        print(regr.predict(np.zeros((1,5))))
 
     linear = nn.Linear(Z.size(1),NUM_TARGETS)
     weight = linear.weight
@@ -440,33 +399,37 @@ def toy_regression_example():
     weight.data = ch.from_numpy(regr.coef_).float()
     bias.data = ch.from_numpy(regr.intercept_).float()
     sample_weight_pth = ch.from_numpy(sample_weight).float()
-    print(f"sklearn weighted loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian', sample_weight=sample_weight_pth).item()}")
+    wloss_sklearn = elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian', sample_weight=sample_weight_pth).item()
+    print(f"sklearn weighted loss: {wloss_sklearn}")
+
+    nnz = (weight.abs() > 1e-5).sum().item()
+    total = weight.numel()
+    wnnz_sklearn = nnz/total
+    print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
 
     for p in [weight,bias]: 
         p.data.zero_()
 
     weighted_loader = add_index_to_dataloader(DataLoader(TensorDataset(X,y), batch_size=20, shuffle=True), sample_weight=sample_weight_pth)
-    train_saga(linear, weighted_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, encoder=encoder, family='gaussian', tol=1e-7, lookbehind=100)
-    print(weight)
-    print(bias)
-    print(linear(ch.zeros(1,5)).max(1)[1])
-    print(f"saga loss: {elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian', sample_weight=sample_weight_pth).item()}")
+    train_saga(linear, weighted_loader, STEP_SIZE, NITERS, ch.ones(1)*LAMBDA, ALPHA, group=False, verbose=NITERS//10, preprocess=preprocess, family='gaussian', tol=1e-7, lookbehind=100)
+    if verbose: 
+        print(weight)
+        print(bias)
+        print(linear(ch.zeros(1,5)).max(1)[1])
+    wloss_saga = elastic_loss(linear, Z, y, LAMBDA, ALPHA, family='gaussian', sample_weight=sample_weight_pth).item()
+    print(f"saga loss: {wloss_saga}")
+    assert abs(wloss_saga - wloss_sklearn) < tol
     
     nnz = (weight.abs() > 1e-5).sum().item()
     total = weight.numel()
+    wnnz_saga = nnz/total
     print(f"weight nnz {nnz}/{total} ({nnz/total:.4f})")
-
-
-    # glm_saga(linear, alt_loader, STEP_SIZE, NITERS, ALPHA, 
-    #          table_device=None, encoder=encoder, group=False, 
-    #          verbose=None, state=None, n_ex=None, n_classes=None, 
-    #          tol=1e-4, epsilon=0.0001, k=100, checkpoint='tmp', 
-    #          solver='saga', do_zero=True, lr_decay_factor=50, metadata=None, 
-    #          val_loader=loader, test_loader=loader, lookbehind=None, 
-    #          family='gaussian') 
+    assert abs(wnnz_saga - wnnz_sklearn) < tol
 
 if __name__ == "__main__": 
-    # toy_example()
+    print("==> toy example tests")
+    toy_example()
+    print("==> dataloader tests")
     toy_dataloader_example()
+    print("==> regression tests")
     toy_regression_example()
-    # imagenet_example()

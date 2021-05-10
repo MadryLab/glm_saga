@@ -24,6 +24,7 @@ import os
 # Logging
 import logging
 import sys
+import warnings
 
 from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split
 
@@ -120,16 +121,16 @@ def elastic_loss(linear, X, y, lam, alpha, family='multinomial', sample_weight=N
     return l + l1 + l2
 
 # Elastic net loss given a loader instead
-def elastic_loss_loader(linear, loader, lam, alpha, encoder=None, family='multinomial'): 
+def elastic_loss_loader(linear, loader, lam, alpha, preprocess=None, family='multinomial'): 
     loss = 0
     n = 0
     device = linear.weight.device
-    if encoder is not None: 
-        encoder_device = get_device(encoder)
+    if preprocess is not None: 
+        preprocess_device = get_device(preprocess)
     for batch in loader: 
         X,y = batch[0].to(device), batch[1].to(device)
-        if encoder is not None: 
-            X = encoder(X)
+        if preprocess is not None: 
+            X = preprocess(X)
         bs = X.size(0)
         loss += elastic_loss(linear, X, y, lam, alpha, family=family)*bs
         n += bs
@@ -154,17 +155,17 @@ def elastic_loss_and_acc(linear, X, y, lam, alpha, family='multinomial'):
     return loss, acc
 
 # Elastic net loss given a loader instead
-def elastic_loss_and_acc_loader(linear, loader, lam, alpha, encoder=None, family='multinomial'): 
+def elastic_loss_and_acc_loader(linear, loader, lam, alpha, preprocess=None, family='multinomial'): 
     loss = 0
     acc=0
     n = 0
     device = linear.weight.device
-    if encoder is not None: 
-        encoder_device = get_device(encoder)
+    if preprocess is not None: 
+        preprocess_device = get_device(preprocess)
     for batch in loader: 
         X,y = batch[0].to(device), batch[1].to(device)
-        if encoder is not None: 
-            X = encoder(X)
+        if preprocess is not None: 
+            X = preprocess(X)
         bs = X.size(0)
         l,a = elastic_loss_and_acc(linear, X, y, lam, alpha, family=family)
         loss += l*bs
@@ -196,7 +197,7 @@ def train(linear, X, y, lr, niters, lam, alpha, group=True, verbose=None):
             weight.data = soft_threshold(weight, lr * lam * alpha)
 
 # Train an elastic GLM with stochastic proximal gradient as an even more inaccurate baseline
-def train_spg(linear, loader, max_lr, nepochs, lam, alpha, encoder=None, min_lr=1e-4, group=True, verbose=None): 
+def train_spg(linear, loader, max_lr, nepochs, lam, alpha, preprocess=None, min_lr=1e-4, group=True, verbose=None): 
     weight, bias = list(linear.parameters())
 
     params = [weight,bias]
@@ -205,7 +206,6 @@ def train_spg(linear, loader, max_lr, nepochs, lam, alpha, encoder=None, min_lr=
     device = linear.weight.device
 
     lrs = ch.logspace(math.log10(max_lr), math.log10(min_lr), nepochs).to(device)
-    lam = lam.to(device)
 
     for t in range(nepochs): 
         lr = lrs[t]
@@ -213,9 +213,9 @@ def train_spg(linear, loader, max_lr, nepochs, lam, alpha, encoder=None, min_lr=
         n_ex = 0
         for X,y,idx in loader: 
             X,y = X.to(device), y.to(device)
-            if encoder is not None: 
+            if preprocess is not None: 
                 with ch.no_grad():
-                    X = encoder(X)
+                    X = preprocess(X)
             with ch.enable_grad(): 
                 out = linear(X)
             # rescaling = X.size(0) / n_ex 
@@ -244,7 +244,7 @@ def train_spg(linear, loader, max_lr, nepochs, lam, alpha, encoder=None, min_lr=
             bias.grad.zero_()
 
         if verbose and (t % verbose) == 0: 
-            spg_obj = total_loss/n_ex + lam * alpha * weight.norm(p=1).item()
+            spg_obj = (total_loss/n_ex + lam * alpha * weight.norm(p=1)).item()
             nnz = (weight.abs() > 1e-5).sum().item()
             total = weight.numel()
             print(f"obj {spg_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) ")
@@ -257,7 +257,7 @@ def train_spg(linear, loader, max_lr, nepochs, lam, alpha, encoder=None, min_lr=
 # initial pass over the loaders
 def train_saga(linear, loader, lr, nepochs, lam, alpha, group=True, verbose=None, 
                 state=None, table_device=None, n_ex=None, n_classes=None, tol=1e-4, 
-                encoder=None, lookbehind=None, family='multinomial', logger=None): 
+                preprocess=None, lookbehind=None, family='multinomial', logger=None): 
     if logger is None: 
         logger = print
     with ch.no_grad(): 
@@ -302,10 +302,10 @@ def train_saga(linear, loader, lr, nepochs, lam, alpha, group=True, verbose=None
                 else: 
                     raise ValueError(f"Loader must return (data, target, index) or (data, target, index, weight) but instead got a tuple of length {len(batch)}")
 
-                if encoder is not None: 
-                    device = get_device(encoder)
+                if preprocess is not None: 
+                    device = get_device(preprocess)
                     with ch.no_grad():
-                        X = encoder(X.to(device))
+                        X = preprocess(X.to(device))
                 X = X.to(weight.device)
                 out = linear(X)
 
@@ -401,16 +401,16 @@ def train_saga(linear, loader, lr, nepochs, lam, alpha, group=True, verbose=None
             # Stop if no progress for lookbehind iterationsd:])
             criteria = lookbehind is not None and (nni >= lookbehind)
 
+            nnz = (weight.abs() > 1e-5).sum().item()
+            total = weight.numel()
             if verbose and (t % verbose) == 0: 
-                nnz = (weight.abs() > 1e-5).sum().item()
-                total = weight.numel()
                 if lookbehind is None: 
-                    logger(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) criteria {criteria:.4f} {dw} {db}")
+                    logger(f"obj {saga_obj.item()} weight nnz {nnz}/{total} ({nnz/total:.4f}) criteria {criteria:.4f} {dw} {db}")
                 else: 
-                    logger(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best}")
+                    logger(f"obj {saga_obj.item()} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best}")
 
             if lookbehind is not None and criteria: 
-                logger(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best} [early stop at {t}]")
+                logger(f"obj {saga_obj.item()} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best} [early stop at {t}]")
                 return {
                     "a_table": a_table.cpu(), 
                     "w_grad_avg": w_grad_avg.cpu(), 
@@ -448,7 +448,7 @@ def maximum_reg(X,y, group=True, family='multinomial'):
     return inner_products.abs().max().item()/X.size(0)
 
 # Same as before, but for a loader instead
-def maximum_reg_loader(loader, group=True, encoder=None, metadata=None, family='multinomial'): 
+def maximum_reg_loader(loader, group=True, preprocess=None, metadata=None, family='multinomial'): 
     if metadata is not None: 
         return metadata['max_reg']['group'] if group else metadata['max_reg']['nongrouped']
 
@@ -497,8 +497,8 @@ def maximum_reg_loader(loader, group=True, encoder=None, metadata=None, family='
 
     # calculate maximum regularization
     inner_products = 0
-    if encoder is not None: 
-        device = get_device(encoder)
+    if preprocess is not None: 
+        device = get_device(preprocess)
     else:
         device = y.device
     for batch in loader: 
@@ -513,8 +513,8 @@ def maximum_reg_loader(loader, group=True, encoder=None, metadata=None, family='
 
         y_map = (target - y_bar)
 
-        if encoder is not None: 
-            X = encoder(X.to(device))
+        if preprocess is not None: 
+            X = preprocess(X.to(device))
             y_map = y_map.to(device)
             y_std = y_std.to(device)
         inner_products += X.t().mm(y_map)
@@ -526,14 +526,18 @@ def maximum_reg_loader(loader, group=True, encoder=None, metadata=None, family='
 # Calculate the regularization path of an elastic GLM with proximal SAGA 
 # Returns a dictionary of <regularization parameter> -> <linear weights and optimizer state>
 def glm_saga(linear, loader, max_lr, nepochs, alpha, 
-             table_device=None, encoder=None, group=False, 
+             table_device=None, preprocess=None, group=False, 
              verbose=None, state=None, n_ex=None, n_classes=None, 
              tol=1e-4, epsilon=0.001, k=100, checkpoint=None, 
-             solver='saga', do_zero=True, lr_decay_factor=50, metadata=None, 
+             do_zero=True, lr_decay_factor=1, metadata=None, 
              val_loader=None, test_loader=None, lookbehind=None, 
-             family='multinomial'): 
-    if encoder is not None and (get_device(linear) != get_device(encoder)): 
-        raise ValueError("Linear and encoder must be on same device (got {get_device(linear)} and {get_device(encoder)})")
+             family='multinomial', encoder=None): 
+    if encoder is not None: 
+        warnings.warn("encoder argument is deprecated; please use preprocess instead", DeprecationWarning)
+        preprocess = encoder
+
+    if preprocess is not None and (get_device(linear) != get_device(preprocess)): 
+        raise ValueError("Linear and preprocess must be on same device (got {get_device(linear)} and {get_device(preprocess)})")
 
     if metadata is not None: 
         if n_ex is None: 
@@ -541,7 +545,7 @@ def glm_saga(linear, loader, max_lr, nepochs, alpha,
         if n_classes is None: 
             n_classes = metadata['y']['num_classes']
 
-    max_lam = maximum_reg_loader(loader, group=group, encoder=encoder, metadata=metadata, family=family) / max(0.001, alpha)
+    max_lam = maximum_reg_loader(loader, group=group, preprocess=preprocess, metadata=metadata, family=family) / max(0.001, alpha)
     min_lam = epsilon*max_lam
 
     # logspace is base 10 but log is base e so use log10
@@ -555,48 +559,42 @@ def glm_saga(linear, loader, max_lr, nepochs, alpha,
     path = []
     best_val_loss = float('inf')
 
-    # old_lam = lams[0]
-    # print(f'learning rate {lr}')
     if checkpoint is not None: 
         os.makedirs(checkpoint, exist_ok=True)
 
-    file_handler = logging.FileHandler(filename=os.path.join(checkpoint, 'output.log'))
-    stdout_handler = logging.StreamHandler(sys.stdout)
-    handlers = [file_handler, stdout_handler]
+        file_handler = logging.FileHandler(filename=os.path.join(checkpoint, 'output.log'))
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        handlers = [file_handler, stdout_handler]
 
-    logging.basicConfig(
-        level=logging.DEBUG, 
-        format='[%(asctime)s] %(levelname)s - %(message)s',
-        handlers=handlers
-    )
-    logger = logging.getLogger('glm_saga')
+        logging.basicConfig(
+            level=logging.DEBUG, 
+            format='[%(asctime)s] %(levelname)s - %(message)s',
+            handlers=handlers
+        )
+        logger = logging.getLogger('glm_saga').info
+    else: 
+        logger = print
 
     for i,(lam,lr) in enumerate(zip(lams,lrs)): 
         start_time = time.time()
-        # lr = lr * lam / old_lam
 
-        if solver == 'saga': 
-            state = train_saga(linear, loader, lr, nepochs, lam, alpha, 
-                        table_device=table_device, encoder=encoder, group=group, verbose=verbose, 
-                        state=state, n_ex=n_ex, n_classes=n_classes, tol=tol, lookbehind=lookbehind, 
-                        family=family, logger=logger.info)
-        elif solver == 'spg': 
-            train_spg(linear, loader, lr, nepochs, lam, alpha, encoder=encoder, min_lr=1e-4, group=group, verbose=verbose)
-        else: 
-            raise ValueError(f"Unknown solver (got {solver})")
+        state = train_saga(linear, loader, lr, nepochs, lam, alpha, 
+                    table_device=table_device, preprocess=preprocess, group=group, verbose=verbose, 
+                    state=state, n_ex=n_ex, n_classes=n_classes, tol=tol, lookbehind=lookbehind, 
+                    family=family, logger=logger)
         
         with ch.no_grad(): 
-            loss,acc = elastic_loss_and_acc_loader(linear, loader, lam, alpha, encoder=encoder, family=family)
+            loss,acc = elastic_loss_and_acc_loader(linear, loader, lam, alpha, preprocess=preprocess, family=family)
             loss,acc = loss.item(),acc.item()
 
             loss_val,acc_val = -1,-1
             if val_loader: 
-                loss_val,acc_val = elastic_loss_and_acc_loader(linear, val_loader, lam, alpha, encoder=encoder, family=family)
+                loss_val,acc_val = elastic_loss_and_acc_loader(linear, val_loader, lam, alpha, preprocess=preprocess, family=family)
                 loss_val,acc_val = loss_val.item(),acc_val.item()
 
             loss_test,acc_test = -1,-1
             if test_loader: 
-                loss_test,acc_test = elastic_loss_and_acc_loader(linear, test_loader, lam, alpha, encoder=encoder, family=family)
+                loss_test,acc_test = elastic_loss_and_acc_loader(linear, test_loader, lam, alpha, preprocess=preprocess, family=family)
                 loss_test,acc_test = loss_test.item(),acc_test.item()
 
             params = {
@@ -625,9 +623,9 @@ def glm_saga(linear, loader, max_lr, nepochs, alpha,
             nnz = (linear.weight.abs() > 1e-5).sum().item()
             total = linear.weight.numel()
             if family == 'multinomial': 
-                logger.info(f"({i}) lambda {lam:.4f}, loss {loss:.4f}, acc {acc:.4f} [val acc {acc_val:.4f}] [test acc {acc_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
+                logger(f"({i}) lambda {lam:.4f}, loss {loss:.4f}, acc {acc:.4f} [val acc {acc_val:.4f}] [test acc {acc_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
             elif family == 'gaussian': 
-                logger.info(f"({i}) lambda {lam:.4f}, loss {loss:.4f} [val loss {loss_val:.4f}] [test loss {loss_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
+                logger(f"({i}) lambda {lam:.4f}, loss {loss:.4f} [val loss {loss_val:.4f}] [test loss {loss_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
 
             if checkpoint is not None: 
                 ch.save(params, os.path.join(checkpoint,f"params{i}.pth"))
