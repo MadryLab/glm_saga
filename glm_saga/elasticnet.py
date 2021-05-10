@@ -21,6 +21,10 @@ import copy
 from tqdm import tqdm
 import os
 
+# Logging
+import logging
+import sys
+
 from torch.utils.data import TensorDataset, DataLoader, Dataset, random_split
 
 # Helper function for getting device of a module
@@ -253,7 +257,9 @@ def train_spg(linear, loader, max_lr, nepochs, lam, alpha, encoder=None, min_lr=
 # initial pass over the loaders
 def train_saga(linear, loader, lr, nepochs, lam, alpha, group=True, verbose=None, 
                 state=None, table_device=None, n_ex=None, n_classes=None, tol=1e-4, 
-                encoder=None, lookbehind=None, family='multinomial'): 
+                encoder=None, lookbehind=None, family='multinomial', logger=None): 
+    if logger is None: 
+        logger = print
     with ch.no_grad(): 
         weight, bias = list(linear.parameters())
         if table_device is None: 
@@ -399,12 +405,12 @@ def train_saga(linear, loader, lr, nepochs, lam, alpha, group=True, verbose=None
                 nnz = (weight.abs() > 1e-5).sum().item()
                 total = weight.numel()
                 if lookbehind is None: 
-                    print(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) criteria {criteria:.4f} {dw} {db}")
+                    logger(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) criteria {criteria:.4f} {dw} {db}")
                 else: 
-                    print(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best}")
+                    logger(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best}")
 
             if lookbehind is not None and criteria: 
-                print(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best} [early stop at {t}]")
+                logger(f"obj {saga_obj} weight nnz {nnz}/{total} ({nnz/total:.4f}) obj_best {obj_best} [early stop at {t}]")
                 return {
                     "a_table": a_table.cpu(), 
                     "w_grad_avg": w_grad_avg.cpu(), 
@@ -412,7 +418,7 @@ def train_saga(linear, loader, lr, nepochs, lam, alpha, group=True, verbose=None
                 }
 
 
-        print(f"did not converge at {nepochs} iterations (criteria {criteria})")
+        logger(f"did not converge at {nepochs} iterations (criteria {criteria})")
         return {
             "a_table": a_table.cpu(), 
             "w_grad_avg": w_grad_avg.cpu(), 
@@ -554,6 +560,17 @@ def glm_saga(linear, loader, max_lr, nepochs, alpha,
     if checkpoint is not None: 
         os.makedirs(checkpoint, exist_ok=True)
 
+    file_handler = logging.FileHandler(filename=os.path.join(checkpoint, 'output.log'))
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    handlers = [file_handler, stdout_handler]
+
+    logging.basicConfig(
+        level=logging.DEBUG, 
+        format='[%(asctime)s] %(levelname)s - %(message)s',
+        handlers=handlers
+    )
+    logger = logging.getLogger('glm_saga')
+
     for i,(lam,lr) in enumerate(zip(lams,lrs)): 
         start_time = time.time()
         # lr = lr * lam / old_lam
@@ -562,7 +579,7 @@ def glm_saga(linear, loader, max_lr, nepochs, alpha,
             state = train_saga(linear, loader, lr, nepochs, lam, alpha, 
                         table_device=table_device, encoder=encoder, group=group, verbose=verbose, 
                         state=state, n_ex=n_ex, n_classes=n_classes, tol=tol, lookbehind=lookbehind, 
-                        family=family)
+                        family=family, logger=logger.info)
         elif solver == 'spg': 
             train_spg(linear, loader, lr, nepochs, lam, alpha, encoder=encoder, min_lr=1e-4, group=group, verbose=verbose)
         else: 
@@ -608,9 +625,9 @@ def glm_saga(linear, loader, max_lr, nepochs, alpha,
             nnz = (linear.weight.abs() > 1e-5).sum().item()
             total = linear.weight.numel()
             if family == 'multinomial': 
-                print(f"({i}) lambda {lam:.4f}, loss {loss:.4f}, acc {acc:.4f} [val acc {acc_val:.4f}] [test acc {acc_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
+                logger.info(f"({i}) lambda {lam:.4f}, loss {loss:.4f}, acc {acc:.4f} [val acc {acc_val:.4f}] [test acc {acc_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
             elif family == 'gaussian': 
-                print(f"({i}) lambda {lam:.4f}, loss {loss:.4f} [val loss {loss_val:.4f}] [test loss {loss_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
+                logger.info(f"({i}) lambda {lam:.4f}, loss {loss:.4f} [val loss {loss_val:.4f}] [test loss {loss_test:.4f}], sparsity {nnz/total} [{nnz}/{total}], time {time.time()-start_time}, lr {lr:.4f}")
 
             if checkpoint is not None: 
                 ch.save(params, os.path.join(checkpoint,f"params{i}.pth"))
