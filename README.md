@@ -1,5 +1,5 @@
 # SAGA-based GPU solver for elastic net problems
-*A package for fitting sparse linear models at deep learning scales. Created by [Eric Wong](https://riceric22.github.io/). This work was initially created and described in our paper, ["Leveraging Sparse Linear Layers for Debuggable Deep Networks"](TODO) with [Shibani Santurkar](https://people.csail.mit.edu/shibani/) and [Aleksander Madry](https://people.csail.mit.edu/madry/)*
+*A package for fitting sparse linear models at deep learning scales. Created by [Eric Wong](https://riceric22.github.io/). This work was initially created and described in our paper, ["Leveraging Sparse Linear Layers for Debuggable Deep Networks"](TODO) with [Shibani Santurkar](https://people.csail.mit.edu/shibani/) and [Aleksander Madry](https://people.csail.mit.edu/madry/).*
 
 This package implements a SAGA-based solver in PyTorch for fitting sparse linear models with elastic net regularization. It combines the path algorithm used by [`glmnet`](https://glmnet.stanford.edu/) with a [minibatch variant of the SAGA algorithm](https://arxiv.org/abs/1902.00071), which allows solving the elastic net at ImageNet scales, which coordinate descent-based elastic net solvers struggle with. 
 
@@ -13,7 +13,7 @@ TODO
 This package is on PyPI. Install it with `pip install glm_saga`. The only requirement is PyTorch. 
 
 ## Usage and documentation
-The package implements the following functions which can be used to fit sparse linear models. A barebones example which fits a sparse linear model on top of a ResNet18 can be found in `resnet18_example.py`. 
+The following function is the main interface which can be used to fit a sequence of sparse linear models. A barebones example which fits a sparse linear model on top of a ResNet18 can be found in `resnet18_example.py`. 
 
 ```
 def glm_saga(linear, loader, max_lr, nepochs, alpha, 
@@ -72,7 +72,10 @@ metadata = {
 ```
 Any metadata supplied through this variable will not be recomputed. Not all variables need to be specified (i.e. it is possible to supply only the mean and standard deviation, and still perform one pass to calculate the maximum regularization). 
 
+## Additional helper functions
+The package also implements several additional functions which are helpful in order to adapt datasets to the format required by the solver, such as adding example indices and normalizers for the data. 
 
+### Adding indices to datasets and dataloaders
 ```
 IndexedTensorDataset(TensorDataset): 
     def __init__(self, *tensors): 
@@ -92,6 +95,8 @@ add_index_to_dataloader(loader, sample_weight=None):
 + A function which takes a dataloader and returns a new dataloader which returns the dataloader indices in addition
 + `sample_weight=None` can be specified to weight each example differently
 
+### Normalizing datasets
+Sometimes a PyTorch dataset or dataloader is not easy to normalize directly. In this case, we can construct a normalizing PyTorch module and pass this into the solver via the `preprocess` argument. 
 ```
 class NormalizedRepresentation(nn.Module): 
     def __init__(self, loader, model=None, do_tqdm=True, mean=None, std=None, metadata=None, device='cuda'): 
