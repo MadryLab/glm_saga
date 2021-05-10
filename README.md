@@ -5,12 +5,17 @@ This package implements a SAGA-based solver in PyTorch for fitting sparse linear
 
 ### Citation
 If you find this solver to be useful in your work, consider citing our paper: 
-```
-TODO
+```bibtex
+    @InProceedings{wong2021leveraging,
+        title={Leveraging Sparse Linear Layers for Debuggable Deep Networks},
+        author={Eric Wong and Shibani Santurkar and Aleksander Madry},
+        year={2021},
+        booktitle={ArXiv preprint arXiv:TODO}
+    }
 ```
 
 ## Installation
-This package is on PyPI. Install it with `pip install glm_saga`. The only requirement is PyTorch. 
+This package is on PyPI. Install it with `pip install glm_saga`. The only requirement is PyTorch. Alternatively, the entire solver is implemented in `glm_saga/elasticnet.py` and can be copied locally if desired. 
 
 ## Usage and documentation
 The following function is the main interface which can be used to fit a sequence of sparse linear models. A barebones example which fits a sparse linear model on top of a ResNet18 can be found in `resnet18_example.py`. 
