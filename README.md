@@ -1,5 +1,5 @@
 # SAGA-based GPU solver for elastic net problems
-*A package for fitting sparse linear models at deep learning scales. Created by [Eric Wong](https://riceric22.github.io/). This work was initially created and described in our paper, ["Leveraging Sparse Linear Layers for Debuggable Deep Networks"](https://arxiv.org/abs/2105.04857) with [Shibani Santurkar](https://people.csail.mit.edu/shibani/) and [Aleksander Madry](https://people.csail.mit.edu/madry/).*
+*A package for fitting sparse linear models at deep learning scales. This work was initially created and described in our paper, ["Leveraging Sparse Linear Layers for Debuggable Deep Networks"](https://arxiv.org/abs/2105.04857) with [Eric Wong](https://riceric22.github.io/), [Shibani Santurkar](https://people.csail.mit.edu/shibani/) and [Aleksander Madry](https://people.csail.mit.edu/madry/).*
 
 This package implements a SAGA-based solver in PyTorch for fitting sparse linear models with elastic net regularization. It combines the path algorithm used by [`glmnet`](https://glmnet.stanford.edu/) with a [minibatch variant of the SAGA algorithm](https://arxiv.org/abs/1902.00071), which allows solving the elastic net at ImageNet scales, which coordinate descent-based elastic net solvers struggle with. 
 
