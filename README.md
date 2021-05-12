@@ -3,6 +3,8 @@
 
 This package implements a SAGA-based solver in PyTorch for fitting sparse linear models with elastic net regularization. It combines the path algorithm used by [`glmnet`](https://glmnet.stanford.edu/) with a [minibatch variant of the SAGA algorithm](https://arxiv.org/abs/1902.00071), which allows solving the elastic net at ImageNet scales, which coordinate descent-based elastic net solvers struggle with. 
 
+The code for replicating the debugging experiments of our paper that use this solver can be found [here](https://github.com/MadryLab/DebuggableDeepNetworks). 
+
 ### Citation
 If you find this solver to be useful in your work, consider citing our paper: 
 ```bibtex
