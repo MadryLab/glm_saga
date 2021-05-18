@@ -6,13 +6,11 @@ This package implements a SAGA-based solver in PyTorch for fitting sparse linear
 ### Citation
 If you find this solver to be useful in your work, consider citing our paper: 
 ```bibtex
-@misc{wong2021leveraging,
-      title={Leveraging Sparse Linear Layers for Debuggable Deep Networks}, 
-      author={Eric Wong and Shibani Santurkar and Aleksander Mądry},
-      year={2021},
-      eprint={2105.04857},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
+@article{wong2021leveraging,
+  title={Leveraging Sparse Linear Layers for Debuggable Deep Networks},
+  author={Wong, Eric and Santurkar, Shibani and M{\k{a}}dry, Aleksander},
+  journal={arXiv preprint arXiv:2105.04857},
+  year={2021}
 }
 ```
 
